@@ -1,3 +1,13 @@
+import Swordsman from './Characters/Swordsman';
+import Magician from './Characters/Magician';
+import Bowman from './Characters/Bowman';
+import Daemon from './Characters/Daemon';
+import Undead from './Characters/Undead';
+import Vampire from './Characters/Vampire';
+import Team from './Team';
+import Character from './Character';
+
+
 export default class GameController {
   constructor(gamePlay, stateService) {
     this.gamePlay = gamePlay;
