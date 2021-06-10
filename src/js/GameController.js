@@ -1,34 +1,113 @@
 import cursors from './cursors';
 import GamePlay from './GamePlay';
+import GameState from './GameState';
 import Team from './Team';
-
 
 export default class GameController {
   constructor(gamePlay, stateService) {
     this.gamePlay = gamePlay;
     this.stateService = stateService;
-    this.goes = 'player';
-    this.waiting = 'computer';
   }
 
   init() {
-    this.gamePlay.drawUi(`prairie`);
-    this.teams = new Team(this.gamePlay.boardSize)
+    this.teams = new Team(this.gamePlay.boardSize);
+    this.initNewGameOrLevel();
+    this.gamePlay.addCellClickListener((index) => this.onCellClick(index));
+    this.gamePlay.addCellEnterListener((index) => this.onCellEnter(index));
+    this.gamePlay.addCellLeaveListener((index) => this.onCellLeave(index));
+    this.gamePlay.addNewGameListener(() => { if (this.goes === 'player') this.newGame(); });
+    this.gamePlay.addSaveGameListener(() => {
+      if (this.goes === 'player') {
+        GameState.from(this);
+        this.stateService.save(GameState.state);
+      }
+    });
+    this.gamePlay.addLoadGameListener(() => { if (this.goes === 'player') this.loadGame(); });
+  }
+
+  newGame() {
+    this.teams = new Team(this.gamePlay.boardSize);
+    this.teams.counterPoint = GameState.state.teams.counterPoint;
+    this.initNewGameOrLevel();
+  }
+
+  loadGame() {
+    try {
+      GameState.from(this.stateService.load());
+      const loadedObject = GameState.state;
+      this.teams.player = loadedObject.teams.player;
+      this.teams.computer = loadedObject.teams.computer;
+      this.teams.currenGameLevel = loadedObject.teams.currenGameLevel;
+      this.teams.currentMap = loadedObject.teams.currentMap;
+      this.teams.counterPoint = loadedObject.teams.counterPoint;
+      this.goes = loadedObject.goes;
+      this.waiting = loadedObject.waiting;
+      this.gameOver = loadedObject.gameOver;
+      this.initNewGameOrLevel(false);
+      if (this.goes === 'computer') {
+        this.computerGoes();
+      }
+    } catch (e) {
+      this.gamePlay.showError(e);
+    }
+  }
+
+  initNewGameOrLevel(noLoadGame = true) {
+    if (noLoadGame) {
+      this.goes = 'player';
+      this.waiting = 'computer';
+      this.gameOver = false;
+    }
+    this.gamePlay.drawUi(this.teams.currentMap);
+    this.redrawPositionsController();
+    GameState.from(this);
+    this.resetValues();
+  }
+
+  redrawPositionsController() {
     this.teamsCaracters = this.teams.arrayCharactersOnPlayField();
     this.gamePlay.redrawPositions(this.teamsCaracters);
-    this.gamePlay.addCellClickListener( index => this.onCellClick(index) );
-    this.gamePlay.addCellEnterListener( index => this.onCellEnter(index) );
-    this.gamePlay.addCellLeaveListener( index => this.onCellLeave(index) );
-    this.resetValues()
   }
-  
-  changingTheOrderOfMoving() {
+
+  nextMove(index) {
+    this.redrawPositionsController();
+    this.gamePlay.deselectCell(this.selectedCharacterIndex);
     this.deleteVisualAvailableSteps();
+    this.gamePlay.deselectCell(index);
     this.resetValues();
+    GameState.from(this);
+    this.checkGameStatus();
+  }
+
+  checkGameStatus() {
+    if (this.teams.player.length === 0
+      || this.teams.computer.length === 0
+      && this.teams.currenGameLevel === 4) {
+      this.gameOver = true;
+      return;
+    } if (this.teams.computer.length === 0) {
+      this.teams.levelUp();
+      this.initNewGameOrLevel();
+      return;
+    }
+    this.changingTheOrderOfMoving();
+  }
+
+  resetValues() {
+    this.attackCapability = true;
+    this.selectedStepIndex = null;
+    this.selectedAttackIndex = null;
+    this.selectedCharacter = null;
+    this.selectedCharacterIndex = null;
+    this.availableSteps = null;
+    this.availableAttack = null;
+  }
+
+  changingTheOrderOfMoving() {
     if (this.goes === 'player') {
       this.goes = 'computer';
       this.waiting = 'player';
-      this.computerGoes()
+      this.computerGoes();
     } else {
       this.goes = 'player';
       this.waiting = 'computer';
@@ -37,16 +116,18 @@ export default class GameController {
 
   onCellClick(index) {
     // TODO: react to click
-    if (this.goes === 'player') {
-        this.selectCharacter(index);
+    if (this.goes === 'player' && !this.gameOver) {
+      this.selectCharacter(index);
+      if (this.attackCapability) {
         this.attack(index);
-        this.moving(index);
+      }
+      this.moving(index);
     }
   }
 
   onCellEnter(index) {
     // TODO: react to mouse enter
-    if (this.goes === 'player') {
+    if (this.goes === 'player' && !this.gameOver) {
       this.displayBriefInfo(index);
       this.visualSelectOtherCharacter(index);
       this.visualAvailableSteps(index);
@@ -56,7 +137,7 @@ export default class GameController {
 
   onCellLeave(index) {
     // TODO: react to mouse leave
-    if (this.goes === 'player') {
+    if (this.goes === 'player' && !this.gameOver) {
       this.gamePlay.hideCellTooltip(index);
       this.deleteVisualAvailableSteps();
       this.deleteVisualAvailableAttack();
@@ -64,27 +145,18 @@ export default class GameController {
     }
   }
 
-   resetValues() {
-    this.selectedStepIndex = null;    
-    this.selectedAttackIndex = null 
-    this.selectedCharacter = null;
-    this.selectedCharacterIndex = null;
-    this.availableSteps = null;
-    this.availableAttack = null;
-   }
-  
   // Проверка персонажа на выбранной клетке
 
-  checkPosition(index){
-    return this.teamsCaracters.find( item => item.position === index ) || false;
+  checkPosition(index) {
+    return this.teamsCaracters.find((item) => item.position === index) || false;
   }
-  
+
   // Отображение краткой информации о персонаже
 
   displayBriefInfo(index) {
     const characterAtPosition = this.checkPosition(index);
     if (characterAtPosition) {
-      const character = characterAtPosition.character;
+      const { character } = characterAtPosition;
       this.gamePlay.showCellTooltip(`\u{1F396}${character.level}\u{2694}${character.attack}\u{1F6E1}${character.defence}\u{2764}${character.health}`, index);
     }
   }
@@ -92,13 +164,13 @@ export default class GameController {
   // Выбор персонажа и отображение выбранного персонажа
 
   selectCharacter(index) {
-    const characterAtPosition = this.checkPosition(index);
-    if (characterAtPosition) {
-      if (this.teams[this.goes].includes(characterAtPosition)) {
-        if(this.selectedCharacterIndex !== null) {
+    const characterAtCurrentIndex = this.checkPosition(index);
+    if (characterAtCurrentIndex) {
+      if (this.teams[this.goes].includes(characterAtCurrentIndex)) {
+        if (this.selectedCharacterIndex !== null) {
           this.gamePlay.deselectCell(this.selectedCharacterIndex);
         }
-        this.selectedCharacter = characterAtPosition;
+        this.selectedCharacter = characterAtCurrentIndex;
         this.selectedCharacterIndex = index;
         this.gamePlay.selectCell(index);
         this.availableSteps = this.arrayAvailableSteps();
@@ -120,37 +192,40 @@ export default class GameController {
   // Визуальное отображение доступных ходов, удаление индикации доступного хода, совершение хода
 
   visualAvailableSteps(index) {
-    if (this.selectedCharacter !== null && this.availableSteps.includes(index) && !this.checkPosition(index)) {
+    if (this.selectedCharacter !== null
+      && this.availableSteps.includes(index)
+      && !this.checkPosition(index)) {
       this.selectedStepIndex = index;
       this.gamePlay.setCursor(cursors.pointer);
-      this.gamePlay.selectCell( index, 'green');
+      this.gamePlay.selectCell(index, 'green');
     }
   }
 
   deleteVisualAvailableSteps() {
-    if (this.selectedCharacter !== null && this.selectedStepIndex !== null ) {
+    if (this.selectedCharacter !== null && this.selectedStepIndex !== null) {
       this.gamePlay.deselectCell(this.selectedStepIndex);
     }
   }
 
   moving(index) {
-    if (this.selectedCharacter !== null && this.availableSteps.includes(index) && !this.checkPosition(index)) {
+    if (this.selectedCharacter !== null
+      && this.availableSteps.includes(index)
+      && !this.checkPosition(index)) {
       this.selectedCharacter.position = index;
-      this.gamePlay.deselectCell(this.selectedCharacterIndex);
-      this.gamePlay.deselectCell(index);
-      this.changingTheOrderOfMoving();
-      this.gamePlay.redrawPositions(this.teamsCaracters);
+      this.nextMove(index);
     }
   }
 
-  // Визуальное отображение доступной атаки, недоступной атаки, удаление индикатора атаки, атакав 
+  // Визуальное отображение доступной атаки, недоступной атаки, удаление индикатора атаки, атакав
 
   visualAvailableAttack(index) {
-    if (this.selectedCharacter !== null && this.checkPosition(index) && this.teams[this.waiting].includes(this.checkPosition(index))) {
+    if (this.selectedCharacter !== null
+      && this.checkPosition(index)
+      && this.teams[this.waiting].includes(this.checkPosition(index))) {
       if (this.availableAttack.includes(index)) {
         this.selectedAttackIndex = index;
-        this.gamePlay.setCursor(cursors.crosshair);        
-        this.gamePlay.selectCell( index, 'red');
+        this.gamePlay.setCursor(cursors.crosshair);
+        this.gamePlay.selectCell(index, 'red');
       } else {
         this.gamePlay.setCursor(cursors.notallowed);
       }
@@ -158,27 +233,26 @@ export default class GameController {
   }
 
   deleteVisualAvailableAttack() {
-    if (this.selectedCharacter !== null && this.selectedAttackIndex !== null ) {
+    if (this.selectedCharacter !== null && this.selectedAttackIndex !== null) {
       this.gamePlay.deselectCell(this.selectedAttackIndex);
     }
   }
 
   attack(index) {
-    if (this.selectedCharacter !== null && this.teams[this.waiting].includes(this.checkPosition(index))) {
+    if (this.selectedCharacter !== null
+      && this.teams[this.waiting].includes(this.checkPosition(index))) {
       if (this.availableAttack.includes(index)) {
-        ( async () => {
+        this.attackCapability = false;
+        (async () => {
           const attacker = this.selectedCharacter.character;
           const target = this.checkPosition(index).character;
           const value = Math.max(attacker.attack - target.defence, attacker.attack * 0.1);
           target.health -= value;
           await this.gamePlay.showDamage(index, value).then(() => {
             this.checkDeathCaracters();
-            this.gamePlay.redrawPositions(this.teamsCaracters);
+            this.nextMove(index);
           });
         })();
-        this.gamePlay.deselectCell(this.selectedCharacterIndex);
-        this.gamePlay.deselectCell(index);
-        this.changingTheOrderOfMoving();
       } else {
         GamePlay.showError('Слишком далеко для атаки');
       }
@@ -186,35 +260,32 @@ export default class GameController {
   }
 
   checkDeathCaracters() {
-    const character = this.teamsCaracters.find(item => item.character.health <= 0);
+    const character = this.teamsCaracters.find((item) => item.character.health <= 0);
     if (character) {
-      const indexDeathCharacter = this.teamsCaracters.findIndex(item => item.position === character.position);
-      const indexCharacter = this.teams[this.waiting].findIndex(item => item === character);
-      this.teamsCaracters.splice(indexDeathCharacter, 1);
+      const indexCharacter = this.teams[this.waiting].findIndex((item) => item === character);
       this.teams[this.waiting].splice(indexCharacter, 1);
-      console.log(this.teams[this.waiting]);
     }
   }
 
   // Примитивная логика компьютера
 
-  computerGoes() {
-    return new Promise((resolve) => {
+  async computerGoes() {
+    await new Promise((resolve) => {
       setTimeout(() => {
         const countCharacters = this.teams[this.goes].length;
-        const randomChoiseCharacter = this.teams[this.goes][Math.floor(Math.random() * countCharacters)];
-        console.log(this.teams[this.goes]);
-        this.selectCharacter(randomChoiseCharacter.position);
-        resolve()
-      }, 500);
-    }).then( () => {
-        return new Promise((resolve) => {
+        const randomCharacter = this.teams[this.goes][Math.floor(Math.random() * countCharacters)];
+        this.selectCharacter(randomCharacter.position);
+        resolve();
+      }, 1000);
+    }).then(() => {
+      new Promise((resolve) => {
         setTimeout(() => {
-          const playerCharactersAtPosition = this.teams[this.waiting].map(i => i.position);
-          const availableAttackAtPlayer = this.availableAttack.filter(item => { return playerCharactersAtPosition.includes(item) });
+          const playerCharactersAtPosition = this.teams[this.waiting].map((i) => i.position);
+          const availableAttackAtPlayer = this.availableAttack.filter((item) => playerCharactersAtPosition.includes(item));
           if (availableAttackAtPlayer.length !== 0) {
             const attackCell = Math.floor(Math.random() * availableAttackAtPlayer.length);
             this.attack(availableAttackAtPlayer[attackCell]);
+            resolve();
           } else {
             let randomValue;
             const randomStepCharacter = () => {
@@ -222,28 +293,28 @@ export default class GameController {
               if (this.checkPosition(randomValue)) {
                 randomStepCharacter();
               }
-            }
-            randomStepCharacter()
+            };
+            randomStepCharacter();
             this.moving(randomValue);
+            resolve();
           }
-          resolve();
-        }, 500)
-      })
-    })
+        }, 1000);
+      });
+    });
   }
 
   // Вычисление доступных ходов выбранного персонажа
 
   arrayAvailableSteps() {
-    let availableSteps = new Set();
-    let gorizont = [];
+    const availableSteps = new Set();
+    const gorizont = [];
     const currentPosition = this.selectedCharacter.position;
     const valueOfMovement = this.selectedCharacter.character.movementRange;
-    const boardSize = this.gamePlay.boardSize;
+    const { boardSize } = this.gamePlay;
 
     for (let i = 0; i >= 0 - valueOfMovement; i--) {
-      let value = currentPosition + i;
-      if ( value % boardSize === 0) {
+      const value = currentPosition + i;
+      if (value % boardSize === 0) {
         gorizont.push(i);
         break;
       }
@@ -251,56 +322,55 @@ export default class GameController {
     }
 
     for (let i = 0; i <= valueOfMovement; i++) {
-      let value = currentPosition + i;
-      if ( (value + 1) % boardSize === 0) {
+      const value = currentPosition + i;
+      if ((value + 1) % boardSize === 0) {
         gorizont.push(i);
         break;
       }
       gorizont.push(i);
     }
-    gorizont.sort()
+    gorizont.sort();
 
-    for (let i = 0 - valueOfMovement; i <= valueOfMovement ; i++) {
-      let value = currentPosition - i * boardSize;
-      if ( value < 0 || value >= boardSize ** 2) {
-        continue;
-      }
-      availableSteps.add(value);
-    }
-
-    for (let a of gorizont) {
-      let value = currentPosition + boardSize * a + a;
+    for (let i = 0 - valueOfMovement; i <= valueOfMovement; i++) {
+      const value = currentPosition - i * boardSize;
       if (value < 0 || value >= boardSize ** 2) {
         continue;
       }
       availableSteps.add(value);
     }
 
-    for (let a of gorizont) {
-      let value = currentPosition - boardSize * a + a;
+    for (const a of gorizont) {
+      const value = currentPosition + boardSize * a + a;
       if (value < 0 || value >= boardSize ** 2) {
         continue;
       }
       availableSteps.add(value);
     }
-    
 
-  gorizont.forEach(item => availableSteps.add(currentPosition + item));
-  return Array.from(availableSteps);
+    for (const a of gorizont) {
+      const value = currentPosition - boardSize * a + a;
+      if (value < 0 || value >= boardSize ** 2) {
+        continue;
+      }
+      availableSteps.add(value);
+    }
+
+    gorizont.forEach((item) => availableSteps.add(currentPosition + item));
+    return Array.from(availableSteps);
   }
 
   // вычисление доступных клеток для атаки выбранного персонажа
 
   arrayAvailableAttack() {
-    let attackArr = new Set();
-    let gorizont = [];
+    const attackArr = new Set();
+    const gorizont = [];
     const currentPosition = this.selectedCharacter.position;
-    const attackRange = this.selectedCharacter.character.attackRange;
-    const boardSize = this.gamePlay.boardSize;
-    
+    const { attackRange } = this.selectedCharacter.character;
+    const { boardSize } = this.gamePlay;
+
     for (let i = 0; i >= 0 - attackRange; i--) {
-      let value = currentPosition + i;
-      if ( value % boardSize === 0) {
+      const value = currentPosition + i;
+      if (value % boardSize === 0) {
         gorizont.push(i);
         break;
       }
@@ -308,8 +378,8 @@ export default class GameController {
     }
 
     for (let i = 0; i <= attackRange; i++) {
-      let value = currentPosition + i;
-      if ( (value + 1) % boardSize === 0) {
+      const value = currentPosition + i;
+      if ((value + 1) % boardSize === 0) {
         gorizont.push(i);
         break;
       }
@@ -317,10 +387,10 @@ export default class GameController {
     }
 
     for (let i = 0 - attackRange; i <= attackRange; i++) {
-      let startIterationValue = currentPosition + i * boardSize;
-      for (let a of gorizont) {
-        let value = startIterationValue + a;
-        if ( value < 0 || value > boardSize ** 2) {
+      const startIterationValue = currentPosition + i * boardSize;
+      for (const a of gorizont) {
+        const value = startIterationValue + a;
+        if (value < 0 || value > boardSize ** 2) {
           continue;
         }
         attackArr.add(value);

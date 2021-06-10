@@ -9,7 +9,7 @@ export default class Character {
     this.checkClass(new.target.name);
   }
 
-  checkClass (value) {
+  checkClass(value) {
     if (value === 'Character') {
       throw new Error('класс Character может только наследоваться');
     }
